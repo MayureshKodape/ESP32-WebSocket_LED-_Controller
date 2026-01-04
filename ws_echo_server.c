@@ -1,12 +1,3 @@
-/* WebSocket Echo Server Example
-
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
-
 #include <esp_wifi.h>
 #include <esp_event.h>
 #include <esp_log.h>
@@ -32,16 +23,10 @@
 //         delay(1000);            
 
 //     }
-
 /* A simple example that demonstrates using websocket echo server
  */
 #define LED_GPIO 2
-
-
-
-
 static const char *TAG = "ws_echo_server";
-
 /*
  * Structure holding server handle
  * and internal socket fd in order
@@ -51,11 +36,9 @@ struct async_resp_arg {
     httpd_handle_t hd;
     int fd;
 };
-
 /*
  * async send function, which we put into the httpd work queue
  */
-
 static esp_err_t echo_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
@@ -117,10 +100,6 @@ static esp_err_t echo_handler(httpd_req_t *req)
     free(buf);
     return ret;
 }
-
-
-
-
 static const httpd_uri_t ws = {
         .uri        = "/ws",
         .method     = HTTP_GET,
@@ -128,8 +107,6 @@ static const httpd_uri_t ws = {
         .user_ctx   = NULL,
         .is_websocket = true
 };
-
-
 static httpd_handle_t start_webserver(void)
 {
     httpd_handle_t server = NULL;
@@ -186,16 +163,8 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-
-    /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
-     * Read "Establishing Wi-Fi or Ethernet Connection" section in
-     * examples/protocols/README.md for more information about this function.
-     */
     ESP_ERROR_CHECK(example_connect());
     // pinMode(13, OUTPUT);
-    /* Register event handlers to stop the server when Wi-Fi or Ethernet is disconnected,
-     * and re-start it upon connection.
-     */
 #ifdef CONFIG_EXAMPLE_CONNECT_WIFI
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &connect_handler, &server));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &disconnect_handler, &server));
@@ -204,7 +173,6 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &connect_handler, &server));
     ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, &disconnect_handler, &server));
 #endif // CONFIG_EXAMPLE_CONNECT_ETHERNET
-
     /* Start the server for the first time */
     server = start_webserver();
 }
