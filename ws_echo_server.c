@@ -1,178 +1,142 @@
-#include <esp_wifi.h>
-#include <esp_event.h>
-#include <esp_log.h>
-#include <esp_system.h>
-#include <nvs_flash.h>
-#include <driver/gpio.h>
-#include <sys/param.h>
-#include "esp_netif.h"
-#include "esp_eth.h"
-#include "protocol_examples_common.h"
-#include "sdkconfig.h"
-// #include "Arduino.h"
-// #include <Arduino.h>
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "nvs_flash.h"
 
+#include "esp_http_server.h"
+#include "driver/gpio.h"
 
+/* ===================== CONFIG ===================== */
+#define LED_GPIO GPIO_NUM_2     // Change if needed
+static const char *TAG = "WS_LED";
 
-#include <esp_http_server.h>
-// void start_led(){
-
-//         digitalWrite(2, HIGH);  // Turn the LED on
-//         delay(1000);            // Wait for one second
-//         digitalWrite(2, LOW);   // Turn the LED off
-//         delay(1000);            
-
-//     }
-/* A simple example that demonstrates using websocket echo server
- */
-#define LED_GPIO 2
-static const char *TAG = "ws_echo_server";
-/*
- * Structure holding server handle
- * and internal socket fd in order
- * to use out of request send
- */
-struct async_resp_arg {
-    httpd_handle_t hd;
-    int fd;
-};
-/*
- * async send function, which we put into the httpd work queue
- */
-static esp_err_t echo_handler(httpd_req_t *req)
+/* ===================== WEBSOCKET HANDLER ===================== */
+static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
-        ESP_LOGI(TAG, "Handshake done, the new connection was opened");
+        ESP_LOGI(TAG, "WebSocket handshake successful");
         return ESP_OK;
     }
 
     httpd_ws_frame_t ws_pkt;
-    uint8_t *buf = NULL;
+    uint8_t buf[128] = {0};
+
     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+    ws_pkt.payload = buf;
     ws_pkt.type = HTTPD_WS_TYPE_TEXT;
-    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
+    ws_pkt.len = sizeof(buf);
+
+    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, sizeof(buf));
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_ws_recv_frame failed: %d", ret);
+        ESP_LOGE(TAG, "WebSocket receive failed: %s", esp_err_to_name(ret));
         return ret;
     }
-    
-    if (ws_pkt.len) {
-        buf = calloc(1, ws_pkt.len + 1);
-        if (buf == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate memory");
-            return ESP_ERR_NO_MEM;
-        }
-        ws_pkt.payload = buf;
-        ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
-        if (ret != ESP_OK) {
-            free(buf);
-            return ret;
-        }
-        ESP_LOGI(TAG, "Received: %s", ws_pkt.payload);
-    } else {
-        return ESP_OK;
-    }
-    
+
+    ESP_LOGI(TAG, "Received: %s", ws_pkt.payload);
+
+    /* LED Control Logic */
     if (strcmp((char *)ws_pkt.payload, "start") == 0) {
-        gpio_set_pull_mode(LED_GPIO, GPIO_PULLUP_ONLY);
-        // delay(1000);            // Wait for one second
-
         gpio_set_level(LED_GPIO, 1);
-        ESP_LOGI(TAG, "LED turned ON");
-        // start_led();
-        printf("hello its working ");
-    } else if (strcmp((char *)ws_pkt.payload, "stop") == 0) {
-        gpio_set_pull_mode(LED_GPIO, GPIO_PULLDOWN_ONLY);
-
+        ESP_LOGI(TAG, "LED ON");
+    } 
+    else if (strcmp((char *)ws_pkt.payload, "stop") == 0) {
         gpio_set_level(LED_GPIO, 0);
-        ESP_LOGI(TAG, "LED turned OFF");
+        ESP_LOGI(TAG, "LED OFF");
     }
 
-    
-    
-    httpd_ws_frame_t ws_response;
-    memset(&ws_response, 0, sizeof(httpd_ws_frame_t));
-    ws_response.type = HTTPD_WS_TYPE_TEXT;
-    ws_response.payload = ws_pkt.payload;
-    ws_response.len = ws_pkt.len;
-    
-    ret = httpd_ws_send_frame(req, &ws_response);
-    free(buf);
-    return ret;
+    /* Echo back the same message */
+    ws_pkt.len = strlen((char *)ws_pkt.payload);
+    httpd_ws_send_frame(req, &ws_pkt);
+
+    return ESP_OK;
 }
-static const httpd_uri_t ws = {
-        .uri        = "/ws",
-        .method     = HTTP_GET,
-        .handler    = echo_handler,
-        .user_ctx   = NULL,
-        .is_websocket = true
-};
+
+/* ===================== HTTP SERVER ===================== */
 static httpd_handle_t start_webserver(void)
 {
-    httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.uri_match_fn = httpd_uri_match_wildcard;
 
-    // Start the httpd server
-    ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
+    httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) == ESP_OK) {
-        // Registering the ws handler
-        ESP_LOGI(TAG, "Registering URI handlers");
-        httpd_register_uri_handler(server, &ws);
+
+        httpd_uri_t ws_uri = {
+            .uri        = "/ws",
+            .method     = HTTP_GET,
+            .handler    = ws_handler,
+            .is_websocket = true
+        };
+
+        httpd_register_uri_handler(server, &ws_uri);
+        ESP_LOGI(TAG, "WebSocket server started");
+
         return server;
     }
 
-    ESP_LOGI(TAG, "Error starting server!");
+    ESP_LOGE(TAG, "Failed to start HTTP server");
     return NULL;
 }
 
-static esp_err_t stop_webserver(httpd_handle_t server)
+/* ===================== WIFI EVENT HANDLER ===================== */
+static void wifi_event_handler(void *arg,
+                               esp_event_base_t event_base,
+                               int32_t event_id,
+                               void *event_data)
 {
-    // Stop the httpd server
-    return httpd_stop(server);
-}
-
-static void disconnect_handler(void* arg, esp_event_base_t event_base,
-                               int32_t event_id, void* event_data)
-{
-    httpd_handle_t* server = (httpd_handle_t*) arg;
-    if (*server) {
-        ESP_LOGI(TAG, "Stopping webserver");
-        if (stop_webserver(*server) == ESP_OK) {
-            *server = NULL;
-        } else {
-            ESP_LOGE(TAG, "Failed to stop http server");
-        }
+    if (event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } 
+    else if (event_id == IP_EVENT_STA_GOT_IP) {
+        ESP_LOGI(TAG, "Wi-Fi connected");
+        start_webserver();
     }
 }
 
-static void connect_handler(void* arg, esp_event_base_t event_base,
-                            int32_t event_id, void* event_data)
+/* ===================== WIFI INIT ===================== */
+static void wifi_init_sta(void)
 {
-    httpd_handle_t* server = (httpd_handle_t*) arg;
-    if (*server == NULL) {
-        ESP_LOGI(TAG, "Starting webserver");
-        *server = start_webserver();
-    }
-}
-
-
-void app_main(void)
-{
-    static httpd_handle_t server = NULL;
-
-    ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(example_connect());
-    // pinMode(13, OUTPUT);
-#ifdef CONFIG_EXAMPLE_CONNECT_WIFI
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &connect_handler, &server));
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &disconnect_handler, &server));
-#endif // CONFIG_EXAMPLE_CONNECT_WIFI
-#ifdef CONFIG_EXAMPLE_CONNECT_ETHERNET
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &connect_handler, &server));
-    ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, &disconnect_handler, &server));
-#endif // CONFIG_EXAMPLE_CONNECT_ETHERNET
-    /* Start the server for the first time */
-    server = start_webserver();
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    esp_event_handler_instance_register(WIFI_EVENT,
+                                        ESP_EVENT_ANY_ID,
+                                        &wifi_event_handler,
+                                        NULL,
+                                        NULL);
+
+    esp_event_handler_instance_register(IP_EVENT,
+                                        IP_EVENT_STA_GOT_IP,
+                                        &wifi_event_handler,
+                                        NULL,
+                                        NULL);
+
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = CONFIG_EXAMPLE_WIFI_SSID,
+            .password = CONFIG_EXAMPLE_WIFI_PASSWORD,
+        },
+    };
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+}
+
+/* ===================== APP MAIN ===================== */
+void app_main(void)
+{
+    ESP_ERROR_CHECK(nvs_flash_init());
+
+    gpio_reset_pin(LED_GPIO);
+    gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED_GPIO, 0);
+
+    wifi_init_sta();
 }
